@@ -1,0 +1,31 @@
+<!doctype html>
+<html>
+  <head><meta charset="utf-8"><title>Socket Test</title></head>
+  <body>
+    <button id="hello">Send Hello</button>
+    <button id="ping">Send Ping</button>
+    <pre id="log"></pre>
+
+    <script src="https://cdn.socket.io/4.8.1/socket.io.min.js"></script>
+    <script>
+      const logEl = document.getElementById('log');
+      const log = (...args) => logEl.textContent += args.join(' ') + '\n';
+
+      const socket = io('http://localhost:3000', { transports: ['websocket'] });
+
+      socket.on('connect', () => log('connected as', socket.id));
+      socket.on('disconnect', (reason) => log('disconnected:', reason));
+
+      socket.on('server:welcome', (data) => log('server:welcome', JSON.stringify(data)));
+      socket.on('server:pong',   (data) => log('server:pong', JSON.stringify(data)));
+      socket.on('server:time',   (data) => log('server:time', JSON.stringify(data)));
+
+      document.getElementById('hello').onclick = () => {
+        socket.emit('client:hello', { name: 'FlutterDev' });
+      };
+      document.getElementById('ping').onclick = () => {
+        socket.emit('client:ping');
+      };
+    </script>
+  </body>
+</html>
