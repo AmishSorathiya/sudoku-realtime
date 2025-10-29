@@ -1,4 +1,4 @@
-// sudoku-server/server.js
+// server.js
 const express = require('express');
 const http = require('http');
 const cors = require('cors');
@@ -18,16 +18,14 @@ const io = new Server(httpServer, {
   cors: { origin: '*', methods: ['GET', 'POST'] },
 });
 
-// ----— MATCHMAKING + GAME LOGIC (short version that matches our client) ----—
-const rooms = new Map();         // roomId -> { players:[id,id], puzzle, startAtMs, finished, ready:Set, rematch:Set, gone:Map }
-const queue = [];                // [{ socketId, name }]
-const players = new Map();       // socketId -> { name, roomId, finding }
+// ---------------- State ----------------
+const rooms = new Map();   // roomId -> { players, puzzle, startAtMs, finished, ready:Set, rematch:Set, gone:Map, dcTimer }
+const queue = [];          // [{ socketId, name }]
+const players = new Map(); // socketId -> { name, roomId, finding }
 
-function makeRoomId() {
-  return 'room_' + Math.random().toString(36).slice(2, 8);
-}
+const GRACE_MS = 8000;     // faster disconnect grace (8s)
 
-// Simple puzzle pool (same as the client)
+// --- Puzzle pool (same structure as client expects) ---
 const puzzles = [
   [[0,0,0,2,6,0,7,0,1],[6,8,0,0,7,0,0,9,0],[1,9,0,0,0,4,5,0,0],[8,2,0,1,0,0,0,4,0],[0,0,4,6,0,2,9,0,0],[0,5,0,0,0,3,0,2,8],[0,0,9,3,0,0,0,7,4],[0,4,0,0,5,0,0,3,6],[7,0,3,0,1,8,0,0,0]],
   [[0,2,0,0,0,6,0,0,9],[0,0,0,0,9,0,0,5,0],[8,0,0,0,0,5,0,0,2],[0,0,8,0,0,0,0,2,0],[0,7,0,4,0,1,0,9,0],[0,3,0,0,0,0,6,0,0],[5,0,0,6,0,0,0,0,7],[0,4,0,0,1,0,0,0,0],[9,0,0,3,0,0,0,1,0]],
@@ -36,26 +34,25 @@ const puzzles = [
 
 function pickPuzzle() {
   const i = Math.floor(Math.random() * puzzles.length);
-  // deep copy
-  return puzzles[i].map(r => [...r]);
+  return puzzles[i].map(r => [...r]); // deep copy
 }
 
-// Server validation
+function makeRoomId() {
+  return 'room_' + Math.random().toString(36).slice(2, 8);
+}
+
 function isSolved(grid) {
   if (!Array.isArray(grid) || grid.length !== 9) return false;
   const want = '123456789';
-  // rows
   for (let r = 0; r < 9; r++) {
     if (!Array.isArray(grid[r]) || grid[r].length !== 9) return false;
     if ([...grid[r]].sort().join('') !== want) return false;
   }
-  // cols
   for (let c = 0; c < 9; c++) {
     const col = [];
     for (let r = 0; r < 9; r++) col.push(grid[r][c]);
     if (col.sort().join('') !== want) return false;
   }
-  // boxes
   for (let br = 0; br < 3; br++) {
     for (let bc = 0; bc < 3; bc++) {
       const box = [];
@@ -68,7 +65,6 @@ function isSolved(grid) {
   return true;
 }
 
-// Try to match the first two in queue
 function tryMatch() {
   while (queue.length >= 2) {
     const a = queue.shift();
@@ -96,6 +92,7 @@ function tryMatch() {
       ready: new Set(),
       rematch: new Set(),
       gone: new Map(),
+      dcTimer: null,
     });
 
     sA.emit('match:found', { roomId, opponentName: pB.name });
@@ -103,25 +100,22 @@ function tryMatch() {
   }
 }
 
-// Grace window cleanup (every 5s)
-const GRACE_MS = 20000;
+// housekeeping (queue prune, stale rooms with both gone >30s)
 setInterval(() => {
   const now = Date.now();
   for (const [id, room] of rooms.entries()) {
-    // remove rooms where both left for >30s
     const bothGone = room.players.every(pid => room.gone.has(pid));
     if (bothGone) {
       const oldest = Math.min(...room.players.map(pid => room.gone.get(pid) || now));
       if (now - oldest > 30000) rooms.delete(id);
     }
   }
-  // prune queue dead sockets
   for (let i = queue.length - 1; i >= 0; i--) {
     if (!io.sockets.sockets.get(queue[i].socketId)) queue.splice(i, 1);
   }
 }, 5000);
 
-// Socket handlers
+// ---------------- Sockets ----------------
 io.on('connection', (socket) => {
   players.set(socket.id, { name: undefined, roomId: null, finding: false });
   socket.emit('server:welcome', { id: socket.id });
@@ -184,9 +178,17 @@ io.on('connection', (socket) => {
   socket.on('game:rematch_request', ({ roomId }) => {
     const room = rooms.get(roomId);
     if (!room || !room.players.includes(socket.id)) return;
+
+    // deny while someone is offline
+    if (room.gone.size > 0) {
+      socket.emit('game:rematch_denied', { reason: 'opponent_offline' });
+      return;
+    }
+
     room.rematch.add(socket.id);
     rooms.set(roomId, room);
     socket.to(roomId).emit('game:rematch_status', { waiting: true });
+
     if (room.rematch.size === room.players.length) {
       room.puzzle = pickPuzzle();
       room.finished = false;
@@ -201,35 +203,46 @@ io.on('connection', (socket) => {
   socket.on('resume:request', ({ roomId, name }) => {
     const room = rooms.get(roomId);
     if (!room) return;
+
     let reclaimed = null;
     for (const pid of room.players) if (room.gone.has(pid)) { reclaimed = pid; break; }
-    if (!reclaimed) return;
+    if (reclaimed == null) return;
 
     const idx = room.players.indexOf(reclaimed);
     if (idx >= 0) room.players[idx] = socket.id;
+
     room.gone.delete(reclaimed);
+    if (room.dcTimer) { clearTimeout(room.dcTimer); room.dcTimer = null; }
     rooms.set(roomId, room);
 
     players.set(socket.id, { name: name || 'Player', roomId, finding: false });
     socket.join(roomId);
+
     socket.emit('resume:ok', { roomId, startAtMs: room.startAtMs, puzzle: room.puzzle });
     socket.to(roomId).emit('opponent:reconnected');
   });
 
   socket.on('disconnect', () => {
+    // remove from queue
     const qIdx = queue.findIndex(q => q.socketId === socket.id);
     if (qIdx !== -1) queue.splice(qIdx, 1);
+
     const meta = players.get(socket.id);
     if (meta?.roomId) {
       const room = rooms.get(meta.roomId);
       if (room) {
         room.gone.set(socket.id, Date.now());
-        rooms.set(meta.roomId, room);
-        socket.to(meta.roomId).emit('opponent:disconnected', { graceMs: GRACE_MS });
-        setTimeout(() => {
+        // clear rematch while offline
+        room.rematch.clear();
+
+        // notify immediately + schedule auto-win
+        io.to(meta.roomId).emit('opponent:disconnected', { graceMs: GRACE_MS });
+
+        if (room.dcTimer) clearTimeout(room.dcTimer);
+        room.dcTimer = setTimeout(() => {
           const r = rooms.get(meta.roomId);
-          if (!r) return;
-          if (r.gone.has(socket.id) && !r.finished) {
+          if (!r || r.finished) return;
+          if (r.gone.has(socket.id)) {
             r.finished = true;
             rooms.set(meta.roomId, r);
             const other = r.players.find(p => p !== socket.id);
@@ -239,8 +252,11 @@ io.on('connection', (socket) => {
             });
           }
         }, GRACE_MS);
+
+        rooms.set(meta.roomId, room);
       }
     }
+
     players.delete(socket.id);
   });
 });
