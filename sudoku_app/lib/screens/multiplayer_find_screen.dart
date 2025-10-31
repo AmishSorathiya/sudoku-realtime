@@ -132,13 +132,17 @@ class _MultiplayerFindScreenState extends State<MultiplayerFindScreen> {
       final sock = IO.io(
         url,
         IO.OptionBuilder()
-            .setTransports(['websocket'])
+        // Prefer WS, but allow fallback to polling:
+            .setTransports(['websocket', 'polling'])
             .disableAutoConnect()
             .enableReconnection()
             .setReconnectionAttempts(999)
             .setReconnectionDelay(800)
+        // .setPath('/socket.io') // optional (default), okay to leave out
             .build(),
       );
+
+
 
       final c = Completer<bool>();
       late void Function(dynamic) onConnect;
@@ -156,7 +160,7 @@ class _MultiplayerFindScreenState extends State<MultiplayerFindScreen> {
       sock.connect();
 
       // Give each candidate a short window to connect
-      final ok = await c.future.timeout(const Duration(seconds: 3), onTimeout: () => false);
+      final ok = await c.future.timeout(const Duration(seconds: 10), onTimeout: () => false);
       if (ok) {
         // Clean listeners (Socket.IO will keep standard listeners)
         sock.off('connect', onConnect);
