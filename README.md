@@ -28,6 +28,7 @@ Real-time multiplayer Sudoku: fast matchmaking, graceful reconnects, and clean M
 
 ## 📁 Structure
 
+```
 sudoku-server/
 ├── sudoku_app/ # Flutter client
 │ ├── lib/
@@ -54,7 +55,7 @@ sudoku-server/
 ├── package.json
 ├── .gitignore
 └── README.md
-
+```
 
 > Tip: `sudoku_grid.dart` should define the `SudokuGrid` widget used by the screens.
 
@@ -64,12 +65,12 @@ sudoku-server/
 
 ### 1) Server (local)
 
-
+```bash
 npm install
 node server.js
 # Health check:
-# http://localhost:3000/health  ->  {"ok":true} 
-
+# http://localhost:3000/health  ->  {"ok":true}
+```
 Render deploy (prod):
 
 Create Web Service → Start command: node server.js
@@ -77,9 +78,8 @@ Server reads PORT. CORS is permissive for dev.
 Health route: /health
 
 2) Client (Flutter)
-
 Update your server URL(s) in sudoku_app/lib/net/server_config.dart:
-
+```dart
 class ServerConfig {
   static const List<String> socketCandidates = [
     'https://sudoku-realtime.onrender.com', // production
@@ -88,64 +88,47 @@ class ServerConfig {
     // 'http://<LAN-IP>:3000',  // physical phone over Wi-Fi
   ];
 }
-
-Run:
+```
+Run :
+``` 
 cd sudoku_app
 flutter pub get
 flutter run
-
+```
 Build APK (release):
+```
 flutter build apk --release
 # output: sudoku_app/build/app/outputs/flutter-apk/app-release.apk
+```
 
 🔌 Socket Events (contract)
 
 Client → Server
-
 client:hello { name }
-
 match:find { name }
-
 match:cancel
-
 game:ready { roomId }
-
 game:finish { roomId, grid }
-
 game:rematch_request { roomId }
-
 resume:request { roomId, name }
-
 Server → Client
-
 server:welcome { id }
-
 match:status { finding, queueSize }
-
 match:found { roomId, opponentName }
-
 game:start { roomId, puzzle, startAt }
-
 game:finish_rejected
-
 game:win { winnerSocketId, elapsedMs }
-
 game:rematch_status { waiting }
-
 game:rematch_denied { reason }
-
 opponent:disconnected { graceMs }
-
 opponent:reconnected
-
 resume:ok { roomId, startAtMs, puzzle }
 
 🧪 Quick Checks
 
 Browser sanity test (with server running): open client.html.
-
 Polling endpoint (from device):
-https://<server>/socket.io/?EIO=4&transport=polling → should return a short payload.
+  https://<server>/socket.io/?EIO=4&transport=polling → should return a short payload.
 
 🛠 Troubleshooting
 
@@ -157,14 +140,15 @@ Use http://10.0.2.2:3000 (not localhost).
 
 Release builds
 Use HTTPS server; ensure Android manifest has:
-
+```
 <uses-permission android:name="android.permission.INTERNET"/>
-
+```
 Frequent disconnects (mobile)
 You can relax server pings in server.js:
-
+```
 const io = new Server(httpServer, {
   cors: { origin: '*', methods: ['GET','POST'] },
   pingTimeout: 30000,
   pingInterval: 25000,
 });
+```
