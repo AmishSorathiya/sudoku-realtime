@@ -64,11 +64,11 @@ sudoku-server/
 
 ### 1) Server (local)
 
-```bash
+
 npm install
 node server.js
 # Health check:
-# http://localhost:3000/health  ->  {"ok":true}
+# http://localhost:3000/health  ->  {"ok":true} 
 
 Render deploy (prod):
 
